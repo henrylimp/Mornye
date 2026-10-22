@@ -1,0 +1,516 @@
+diff --git a/ios/Podfile b/ios/Podfile
+index 0c7707c..b09c7da 100644
+--- a/ios/Podfile
++++ b/ios/Podfile
+@@ -1,5 +1,5 @@
+ # Uncomment this line to define a global platform for your project
+-platform :ios, '16.0'
++platform :ios, '15.0'
+ 
+ # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+@@ -82,7 +82,7 @@ post_install do |installer|
+   installer.pods_project.targets.each do |target|
+     flutter_additional_ios_build_settings(target)
+     target.build_configurations.each do |config|
+-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
++      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+       definitions = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS']
+       unless definitions.include?('PERMISSION_NOTIFICATIONS=1')
+diff --git a/ios/Runner.xcodeproj/project.pbxproj b/ios/Runner.xcodeproj/project.pbxproj
+index 6006557..280ba15 100644
+--- a/ios/Runner.xcodeproj/project.pbxproj
++++ b/ios/Runner.xcodeproj/project.pbxproj
+@@ -582,7 +582,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				SDKROOT = iphoneos;
+ 				SUPPORTED_PLATFORMS = iphoneos;
+@@ -713,7 +713,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = YES;
+ 				ONLY_ACTIVE_ARCH = YES;
+ 				SDKROOT = iphoneos;
+@@ -764,7 +764,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				SDKROOT = iphoneos;
+ 				SUPPORTED_PLATFORMS = iphoneos;
+diff --git a/lib/controllers/mornye_glass_warmup.dart b/lib/controllers/mornye_glass_warmup.dart
+index 7d07eb8..7c33c1d 100644
+--- a/lib/controllers/mornye_glass_warmup.dart
++++ b/lib/controllers/mornye_glass_warmup.dart
+@@ -76,7 +76,7 @@ Future<void> _rasterize(ui.FlutterView view) async {
+       container: boundary,
+       child: ProviderScope(
+         overrides: [
+-          mornyeGlassLevelProvider.overrideWithValue(MornyeGlassLevel.liquid),
++          mornyeGlassLevelProvider.overrideWithValue(MornyeGlassLevel.frosted),
+         ],
+         child: Directionality(
+           textDirection: TextDirection.ltr,
+diff --git a/lib/providers/runtime_profile_provider.dart b/lib/providers/runtime_profile_provider.dart
+index dac740b..20c6555 100644
+--- a/lib/providers/runtime_profile_provider.dart
++++ b/lib/providers/runtime_profile_provider.dart
+@@ -44,13 +44,13 @@ enum MornyeGlassLevel {
+ }
+ 
+ final mornyeGlassLevelProvider = Provider<MornyeGlassLevel>((ref) {
++  // Classic iOS-style frosted blur everywhere; the refractive "liquid glass"
++  // lens is intentionally never used.
+   final lowEnd = ref.watch(lowEndDeviceProvider);
+-  if (!lowEnd && ref.watch(deviceSupportsLiquidGlassProvider)) {
+-    return MornyeGlassLevel.liquid;
++  if (lowEnd && !ref.watch(backdropBlurEnabledProvider)) {
++    return MornyeGlassLevel.flat;
+   }
+-  // The user's "always use blur effects" override restores the full material.
+-  if (ref.watch(backdropBlurEnabledProvider)) return MornyeGlassLevel.liquid;
+-  return lowEnd ? MornyeGlassLevel.flat : MornyeGlassLevel.frosted;
++  return MornyeGlassLevel.frosted;
+ });
+ 
+ /// Backdrop blur for Mornye surfaces (frosted or liquid).
+diff --git a/lib/screens/library_tracks_folder_screen.dart b/lib/screens/library_tracks_folder_screen.dart
+index f6e6797..b45cae5 100644
+--- a/lib/screens/library_tracks_folder_screen.dart
++++ b/lib/screens/library_tracks_folder_screen.dart
+@@ -1,8 +1,11 @@
+ import 'dart:io';
+ 
++import 'package:audio_service/audio_service.dart' show MediaItem;
+ import 'package:file_picker/file_picker.dart';
+ import 'package:flutter/material.dart';
+ import 'package:path/path.dart' as p;
++import 'package:mornye/theme/cover_palette.dart' show HeaderPalette;
++import 'package:mornye/widgets/app_icon.dart';
+ import 'package:mornye/widgets/app_icon_button.dart';
+ import 'package:mornye/widgets/collection_scaffold.dart';
+ import 'package:mornye/widgets/expressive_button.dart';
+@@ -74,6 +77,56 @@ class _LibraryTracksFolderScreenState
+         CollapsingHeaderScrollMixin<LibraryTracksFolderScreen> {
+   UserPlaylistCollection? playlist;
+   final _folderData = LibraryTracksFolderData();
++  final GlobalKey _nowPlayingItemKey = GlobalKey();
++  String? _nowPlayingEntryKey;
++
++  /// Index of the currently playing song in [entries], or -1. The player only
++  /// exposes title and artist for queue items, so those are matched.
++  int _nowPlayingIndex(List<CollectionTrackEntry> entries, MediaItem? item) {
++    if (item == null) return -1;
++    String norm(String? v) => (v ?? '').trim().toLowerCase();
++    final title = norm(item.title);
++    final artist = norm(item.artist);
++    if (title.isEmpty) return -1;
++    return entries.indexWhere(
++      (e) =>
++          norm(e.track.name) == title &&
++          (artist.isEmpty || norm(e.track.artistName) == artist),
++    );
++  }
++
++  /// Scrolls the list so the currently playing song is centred on screen.
++  Future<void> _locateNowPlaying(
++    List<CollectionTrackEntry> entries,
++    int index,
++  ) async {
++    if (index < 0 || index >= entries.length || !scrollController.hasClients) {
++      return;
++    }
++    setState(() => _nowPlayingEntryKey = entries[index].key);
++    const estimatedRowHeight = 72.0;
++    final viewport = MediaQuery.sizeOf(context).height;
++    final position = scrollController.position;
++    final estimate =
++        calculateExpandedHeight(context) +
++        index * estimatedRowHeight -
++        viewport / 3;
++    await scrollController.animateTo(
++      estimate.clamp(0.0, position.maxScrollExtent),
++      duration: const Duration(milliseconds: 350),
++      curve: Curves.easeOutCubic,
++    );
++    if (!mounted) return;
++    await WidgetsBinding.instance.endOfFrame;
++    final itemContext = _nowPlayingItemKey.currentContext;
++    if (!mounted || itemContext == null || !itemContext.mounted) return;
++    await Scrollable.ensureVisible(
++      itemContext,
++      alignment: 0.5,
++      duration: const Duration(milliseconds: 250),
++      curve: Curves.easeOutCubic,
++    );
++  }
+ 
+   @override
+   void initState() {
+@@ -348,6 +401,9 @@ class _LibraryTracksFolderScreenState
+                 return KeyedSubtree(
+                   key: ValueKey(entry.key),
+                   child: StaggeredListItem(
++                    key: entry.key == _nowPlayingEntryKey
++                        ? _nowPlayingItemKey
++                        : null,
+                     index: index,
+                     child: _CollectionTrackTile(
+                       entry: entry,
+@@ -521,6 +577,10 @@ class _LibraryTracksFolderScreenState
+     final customCoverPath = playlist?.coverImagePath;
+     final isLovedMode = widget.mode == LibraryTracksFolderMode.loved;
+     final isPlaylistMode = widget.mode == LibraryTracksFolderMode.playlist;
++    final nowPlayingIndex = _nowPlayingIndex(
++      entries,
++      ref.watch(currentMediaItemProvider).value,
++    );
+     final rawCoverUrl = isLovedMode ? null : _firstRawCoverUrl(entries);
+     final localCoverUrl =
+         rawCoverUrl == null && !isLovedMode && entries.isNotEmpty
+@@ -635,31 +695,21 @@ class _LibraryTracksFolderScreenState
+       appBarActions: [
+         if (!isSelectionMode && entries.isNotEmpty)
+           HeaderCircleButton(
+-            icon: Icons.ios_share,
+-            iconSize: 20,
+-            tooltip: context.l10n.collectionExportM3u,
+-            onPressed: () => _exportAsM3u8(context, title, entries),
+-          ),
+-        if (isPlaylistMode && !isSelectionMode) ...[
+-          const SizedBox(width: 8),
+-          HeaderCircleButton(
+-            icon: Icons.edit_outlined,
+-            iconSize: 20,
+-            tooltip: context.l10n.collectionRenamePlaylist,
+-            onPressed: () {
+-              final id = widget.playlistId ?? playlist?.id;
+-              if (id == null || id.isEmpty) return;
+-              _showRenamePlaylistDialog(context, id, playlist?.name ?? title);
+-            },
++            icon: Icons.my_location,
++            tooltip: context.l10n.nowPlayingTitle,
++            onPressed: nowPlayingIndex < 0
++                ? null
++                : () => _locateNowPlaying(entries, nowPlayingIndex),
+           ),
+-          const SizedBox(width: 8),
+-          HeaderCircleButton(
+-            icon: Icons.camera_alt_outlined,
+-            iconSize: 20,
+-            tooltip: context.l10n.collectionPlaylistChangeCover,
+-            onPressed: () => _showCoverOptionsSheet(context, hasCustomCover),
++        if (!isSelectionMode && (entries.isNotEmpty || isPlaylistMode))
++          _buildMoreMenu(
++            context,
++            title: title,
++            entries: entries,
++            playlist: playlist,
++            hasCustomCover: hasCustomCover,
++            isPlaylistMode: isPlaylistMode,
+           ),
+-        ],
+       ],
+       // Centered so the tight leading slot cannot stretch it.
+       leading: Center(
+@@ -676,6 +726,59 @@ class _LibraryTracksFolderScreenState
+     );
+   }
+ 
++  /// Single "•••" menu holding every playlist editing action.
++  Widget _buildMoreMenu(
++    BuildContext context, {
++    required String title,
++    required List<CollectionTrackEntry> entries,
++    required UserPlaylistCollection? playlist,
++    required bool hasCustomCover,
++    required bool isPlaylistMode,
++  }) {
++    final palette = HeaderPalette.of(context);
++    return PopupMenuButton<String>(
++      tooltip: MaterialLocalizations.of(context).showMenuTooltip,
++      padding: EdgeInsets.zero,
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
++      onSelected: (value) {
++        switch (value) {
++          case 'rename':
++            final id = widget.playlistId ?? playlist?.id;
++            if (id == null || id.isEmpty) return;
++            _showRenamePlaylistDialog(context, id, playlist?.name ?? title);
++          case 'cover':
++            _showCoverOptionsSheet(context, hasCustomCover);
++          case 'export':
++            _exportAsM3u8(context, title, entries);
++        }
++      },
++      itemBuilder: (context) => [
++        if (isPlaylistMode)
++          PopupMenuItem(
++            value: 'rename',
++            child: Text(context.l10n.collectionRenamePlaylist),
++          ),
++        if (isPlaylistMode)
++          PopupMenuItem(
++            value: 'cover',
++            child: Text(context.l10n.collectionPlaylistChangeCover),
++          ),
++        if (entries.isNotEmpty)
++          PopupMenuItem(
++            value: 'export',
++            child: Text(context.l10n.collectionExportM3u),
++          ),
++      ],
++      child: HeaderMiniCircle(
++        child: AppIcon(
++          mornyeIconFor(Icons.more_horiz),
++          size: 18,
++          color: palette.onSurface,
++        ),
++      ),
++    );
++  }
++
+   Widget _buildPlayAllCenterButton(List<CollectionTrackEntry> entries) {
+     final tracks = entries.map((e) => e.track).toList(growable: false);
+     return HeaderFilledButton(
+diff --git a/lib/utils/adaptive_layout.dart b/lib/utils/adaptive_layout.dart
+index 9cc8c15..66454ef 100644
+--- a/lib/utils/adaptive_layout.dart
++++ b/lib/utils/adaptive_layout.dart
+@@ -11,8 +11,11 @@ const double navigationRailBreakpoint = 1440;
+ const double expandedLayoutBreakpoint = 840;
+ const double defaultWideContentMaxWidth = 840;
+ 
++/// Tablets (iPad mini portrait is 744pt wide) get the left-hand rail too.
++const double tabletNavigationRailBreakpoint = 700;
++
+ bool useNavigationRailForWidth(double width) =>
+-    width >= navigationRailBreakpoint;
++    width >= tabletNavigationRailBreakpoint;
+ 
+ /// The Material theme follows Material's expanded window class.
+ bool useMaterialNavigationRailForWidth(double width) =>
+diff --git a/lib/widgets/album_detail_header.dart b/lib/widgets/album_detail_header.dart
+index 1a2f882..d3b0c57 100644
+--- a/lib/widgets/album_detail_header.dart
++++ b/lib/widgets/album_detail_header.dart
+@@ -139,7 +139,17 @@ class AlbumDetailHeader extends StatelessWidget {
+     final details = _buildMornyeDetails(context);
+     Widget toolbar({bool collapsed = true}) => SliverAppBar(
+       pinned: true,
+-      backgroundColor: collapsed ? scheme.surface : Colors.transparent,
++      // Old-iOS navigation bar: content scrolls under a blurred, translucent
++      // bar once the header has collapsed.
++      backgroundColor: Colors.transparent,
++      flexibleSpace: collapsed
++          ? ClipRect(
++              child: BackdropFilter(
++                filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
++                child: ColoredBox(color: scheme.surface.withValues(alpha: 0.78)),
++              ),
++            )
++          : null,
+       surfaceTintColor: Colors.transparent,
+       scrolledUnderElevation: 0,
+       title: AnimatedOpacity(
+@@ -696,6 +706,30 @@ class HeaderFilledButton extends StatelessWidget {
+   }
+ }
+ 
++/// Small flat translucent disc used behind header icons.
++class HeaderMiniCircle extends StatelessWidget {
++  const HeaderMiniCircle({super.key, required this.child, this.size = 30});
++
++  final Widget child;
++  final double size;
++
++  @override
++  Widget build(BuildContext context) {
++    final scheme = HeaderPalette.of(context);
++    final dark = scheme.brightness == Brightness.dark;
++    return Container(
++      width: size,
++      height: size,
++      alignment: Alignment.center,
++      decoration: BoxDecoration(
++        shape: BoxShape.circle,
++        color: scheme.onSurface.withValues(alpha: dark ? 0.16 : 0.10),
++      ),
++      child: child,
++    );
++  }
++}
++
+ /// Circular header icon button (add-to-playlist, love-all, ...). Sized to the
+ /// minimum touch target and tinted from the [HeaderPalette].
+ class HeaderCircleButton extends ConsumerWidget {
+@@ -756,30 +790,27 @@ class HeaderCircleButton extends ConsumerWidget {
+           ),
+         );
+       }
+-      final blurEnabled = ref.watch(mornyeBlurEnabledProvider);
+-      final button = IconButton(
+-        onPressed: onPressed,
+-        tooltip: tooltip,
+-        icon: AppIcon(mornyeIconFor(icon), size: iconSize),
+-        style: IconButton.styleFrom(
+-          minimumSize: Size.square(buttonSize ?? 44),
+-          foregroundColor: iconColor ?? scheme.onSurface,
+-        ),
+-      );
++      // Old-iOS style: a small, flat translucent disc (like the "•••" button
++      // in Apple Music) instead of a large glass lens.
++      final glyph = iconSize > 18 ? 18.0 : iconSize;
+       return Center(
+         widthFactor: 1,
+-        child: MornyeGlass.navigation(
+-          radius: (buttonSize ?? 48) / 2,
+-          tintColor:
+-              glassTintColor ??
+-              (scheme.brightness == Brightness.dark
+-                  ? Colors.black
+-                  : Colors.white),
+-          tintOpacity:
+-              glassTintOpacity ??
+-              (scheme.brightness == Brightness.dark ? 0.45 : 0.55),
+-          blurEnabled: blurEnabled,
+-          child: button,
++        child: Tooltip(
++          message: tooltip,
++          child: CupertinoButton(
++            padding: EdgeInsets.zero,
++            onPressed: onPressed,
++            child: HeaderMiniCircle(
++              size: buttonSize ?? 30,
++              child: AppIcon(
++                mornyeIconFor(icon),
++                size: glyph,
++                color: onPressed == null
++                    ? scheme.onSurface.withValues(alpha: 0.35)
++                    : iconColor ?? scheme.onSurface,
++              ),
++            ),
++          ),
+         ),
+       );
+     }
+diff --git a/lib/widgets/mornye_chrome.dart b/lib/widgets/mornye_chrome.dart
+index 27acdc6..dfe234d 100644
+--- a/lib/widgets/mornye_chrome.dart
++++ b/lib/widgets/mornye_chrome.dart
+@@ -178,7 +178,7 @@ class MornyeGlass extends ConsumerWidget {
+ 
+   // Quantized and shared across surfaces. Avoid composed color filters and
+   // rebuilding a Gaussian filter for each clarity-slider animation frame.
+-  static const _blurSigmas = [2.0, 3.0, 6.0, 16.0];
++  static const _blurSigmas = [2.0, 3.0, 6.0, 16.0, 24.0];
+   static final _blurs = [
+     for (final sigma in _blurSigmas)
+       ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+@@ -260,18 +260,25 @@ class MornyeGlass extends ConsumerWidget {
+     // Let the upper end of the clarity slider reveal more of the page. Keep
+     // the tinted endpoint opaque and the single-pass blur budget unchanged.
+     final tintStrength = (1 - clarity) * (1 - clarity);
++    // Old-iOS bar material: a strong blur under a light/dark veil.
++    final classicTint = tintColor ??
++        (dark
++            ? const Color(0xFF1C1C1E).withValues(alpha: 0.72)
++            : const Color(0xFFF9F9F9).withValues(alpha: 0.78));
+     final tint = translucent
+-        ? Color.alphaBlend(
+-            scheme.surfaceContainerHigh.withValues(alpha: tintStrength),
+-            baseTint,
+-          )
++        ? (level == MornyeGlassLevel.frosted
++              ? classicTint
++              : Color.alphaBlend(
++                  scheme.surfaceContainerHigh.withValues(alpha: tintStrength),
++                  baseTint,
++                ))
+         : scheme.surfaceContainerHigh;
+     final insideGlass =
+         context.dependOnInheritedWidgetOfExactType<_GlassBackdropScope>() !=
+         null;
+     // At low clarity the tint obscures almost all detail. In particular, 10%
+     // must not suddenly enable backdrop sampling on a mid-range GPU.
+-    final blurThreshold = level == MornyeGlassLevel.frosted ? 0.5 : 0.2;
++    final blurThreshold = level == MornyeGlassLevel.frosted ? 0.0 : 0.2;
+     final sampleBackdrop =
+         translucent &&
+         samplesBackdrop &&
+@@ -286,7 +293,7 @@ class MornyeGlass extends ConsumerWidget {
+     // Clear glass softens the backdrop less. Keep the mid-range fallback at
+     // its small blur budget, and reuse these filters in the lens renderer too.
+     final filterIndex = level == MornyeGlassLevel.frosted
+-        ? 1
++        ? 4
+         : clarity >= 0.9
+         ? 0
+         : clarity >= 0.6
+@@ -309,7 +316,9 @@ class MornyeGlass extends ConsumerWidget {
+       // Child controls paint on this surface; never re-blur their parent.
+       child: _GlassBackdropScope(child: child),
+     );
+-    final shadows = firstInGroup && lastInGroup
++    final shadows = firstInGroup &&
++            lastInGroup &&
++            level != MornyeGlassLevel.frosted
+         ? [
+             BoxShadow(
+               color: Colors.black.withValues(alpha: dark ? 0.14 : 0.08),
+diff --git a/rust_backend/MornyeBackend.podspec b/rust_backend/MornyeBackend.podspec
+index fa943f8..2aa31da 100644
+--- a/rust_backend/MornyeBackend.podspec
++++ b/rust_backend/MornyeBackend.podspec
+@@ -6,7 +6,7 @@ Pod::Spec.new do |spec|
+   spec.license = { :type => 'MIT', :file => 'LICENSE' }
+   spec.author = { 'Mornye' => 'noreply@mornye.local' }
+   spec.source = { :path => '.' }
+-  spec.ios.deployment_target = '16.0'
++  spec.ios.deployment_target = '15.0'
+   spec.swift_version = '5.0'
+   spec.static_framework = true
+   # build_rust_backend.sh stages this spec beside the generated iOS artifacts.
+diff --git a/scripts/build_rust_backend.sh b/scripts/build_rust_backend.sh
+index 103a8ac..0aa6e39 100644
+--- a/scripts/build_rust_backend.sh
++++ b/scripts/build_rust_backend.sh
+@@ -118,10 +118,10 @@ elif [[ "$PLATFORM" == "ios" ]]; then
+     exit 1
+   fi
+   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+-  export IPHONEOS_DEPLOYMENT_TARGET=16.0
+-  export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios="-isysroot \"$(xcrun --sdk iphoneos --show-sdk-path)\" --target=arm64-apple-ios16.0"
+-  export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=arm64-apple-ios16.0-simulator"
+-  export BINDGEN_EXTRA_CLANG_ARGS_x86_64_apple_ios="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=x86_64-apple-ios16.0-simulator"
++  export IPHONEOS_DEPLOYMENT_TARGET=15.0
++  export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios="-isysroot \"$(xcrun --sdk iphoneos --show-sdk-path)\" --target=arm64-apple-ios15.0"
++  export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=arm64-apple-ios15.0-simulator"
++  export BINDGEN_EXTRA_CLANG_ARGS_x86_64_apple_ios="-isysroot \"$(xcrun --sdk iphonesimulator --show-sdk-path)\" --target=x86_64-apple-ios15.0-simulator"
+   for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+     cargo build --locked --release -p mornye-mobile --target "$target"
+   done
+diff --git a/third_party/mornye_discord/ios/mornye_discord.podspec b/third_party/mornye_discord/ios/mornye_discord.podspec
+index b238790..f562209 100644
+--- a/third_party/mornye_discord/ios/mornye_discord.podspec
++++ b/third_party/mornye_discord/ios/mornye_discord.podspec
+@@ -8,7 +8,7 @@ Pod::Spec.new do |s|
+   s.source = { :path => '.' }
+   s.source_files = 'Classes/**/*'
+   s.dependency 'Flutter'
+-  s.platform = :ios, '16.0'
++  s.platform = :ios, '15.0'
+   sdk = 'Frameworks/discord_partner_sdk.xcframework'
+   if ENV['MORNYE_DISCORD_SDK'] != '0' && File.directory?(File.join(__dir__, sdk))
+     s.vendored_frameworks = sdk
