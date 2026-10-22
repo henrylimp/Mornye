@@ -41,6 +41,7 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/nav_destination_icons.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/mini_player.dart';
+import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/lazy_tab_view.dart';
 import 'package:mornye/widgets/expressive_navigation_bar.dart';
 import 'package:mornye/widgets/mornye_bottom_bar.dart';
@@ -689,16 +690,20 @@ class _MainShellState extends ConsumerState<MainShell>
         MediaQuery.viewInsetsOf(context).bottom == 0 &&
         MediaQuery.textScalerOf(context).scale(15) <= 20;
 
-    Widget observeScroll(Widget child, int index) =>
-        NotificationListener<ScrollNotification>(
-          onNotification: (notification) {
-            if (canMinimizeChrome && index == _currentIndex) {
-              return _mornyeChrome.handleScroll(notification);
-            }
-            return false;
-          },
-          child: child,
-        );
+    Widget observeScroll(Widget child, int index) => LibraryFastScroller(
+      minScreens: 0,
+      topPadding: MediaQuery.paddingOf(context).top + kToolbarHeight,
+      labelAt: (_) => null,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (canMinimizeChrome && index == _currentIndex) {
+            return _mornyeChrome.handleScroll(notification);
+          }
+          return false;
+        },
+        child: child,
+      ),
+    );
 
     final pageView = KeyedSubtree(
       key: _pageViewKey,

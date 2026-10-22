@@ -45,8 +45,8 @@ class LibraryFastScroller extends StatefulWidget {
 }
 
 class _LibraryFastScrollerState extends State<LibraryFastScroller> {
-  static const _thumbHeight = 52.0;
-  static const _hitWidth = 32.0;
+  static const _thumbHeight = 56.0;
+  static const _hitWidth = 44.0;
 
 
   ScrollPosition? _position;
@@ -62,7 +62,8 @@ class _LibraryFastScrollerState extends State<LibraryFastScroller> {
   double _dragDirection = 0;
   Timer? _hideTimer;
 
-  bool get _long => _maxExtent > _viewport * widget.minScreens;
+  bool get _long =>
+      widget.minScreens <= 0 ? _maxExtent > 1 : _maxExtent > _viewport * widget.minScreens;
 
   double get _fraction =>
       _maxExtent <= 0 ? 0 : (_pixels / _maxExtent).clamp(0.0, 1.0);
@@ -114,16 +115,13 @@ class _LibraryFastScrollerState extends State<LibraryFastScroller> {
   }
 
   bool _onMetricsNotification(ScrollMetricsNotification notification) {
-    if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) {
-      return false;
-    }
+    if (notification.metrics.axis != Axis.vertical) return false;
     _attachPosition(notification.context);
     _readMetrics(notification.metrics);
     return false;
   }
 
   bool _onNotification(ScrollNotification notification) {
-    if (notification.depth != 0) return false;
     final metrics = notification.metrics;
     if (metrics.axis != Axis.vertical) return false;
     _attachPosition(notification.context);
@@ -263,15 +261,14 @@ class _LibraryFastScrollerState extends State<LibraryFastScroller> {
                                       duration: motion.duration,
                                       curve: motion.curve,
                                       margin: const EdgeInsets.only(right: 4),
-                                      width: _dragging ? 10 : 6,
+                                      width: _dragging ? 12 : 8,
                                       height: _thumbHeight,
                                       decoration: ShapeDecoration(
                                         color: _dragging
                                             ? colors.primary
-                                            : colors.onSurfaceVariant
-                                                  .withValues(
-                                                    alpha: mornye ? 0.45 : 0.6,
-                                                  ),
+                                            : colors.primary.withValues(
+                                                alpha: mornye ? 0.82 : 0.72,
+                                              ),
                                         shape: const StadiumBorder(),
                                       ),
                                     ),

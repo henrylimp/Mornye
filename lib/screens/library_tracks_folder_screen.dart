@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:audio_service/audio_service.dart' show MediaItem;
 import 'package:path/path.dart' as p;
 import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/collection_scaffold.dart';
@@ -40,6 +41,7 @@ import 'package:mornye/widgets/selection_bottom_bar.dart';
 import 'package:mornye/widgets/in_library_badge.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/animation_utils.dart';
+import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/track_detail_actions.dart';
 
 String? _resolveRawCoverUrl(Track track) {
@@ -74,6 +76,146 @@ class _LibraryTracksFolderScreenState
         CollapsingHeaderScrollMixin<LibraryTracksFolderScreen> {
   UserPlaylistCollection? playlist;
   final _folderData = LibraryTracksFolderData();
+  final TextEditingController _playlistSearchController =
+      TextEditingController();
+  final FocusNode _playlistSearchFocusNode = FocusNode();
+  final GlobalKey _playlistSearchFieldKey = GlobalKey();
+  String _playlistSearchQuery = '';
+  String? _jumpTargetEntryKey;
+  GlobalKey? _jumpTargetGlobalKey;
+
+  bool get _isPlaylistMode => widget.mode == LibraryTracksFolderMode.playlist;
+
+  List<int> _visibleEntryIndices(List<CollectionTrackEntry> entries) {
+    final query = _playlistSearchQuery.trim().toLowerCase();
+    return [
+      for (var index = 0; index < entries.length; index++)
+        if (!_isPlaylistMode ||
+            query.isEmpty ||
+            _trackMatchesPlaylistQuery(entries[index].track, query))
+          index,
+    ];
+  }
+
+  bool _trackMatchesPlaylistQuery(Track track, String query) {
+    final fields = <String?>[
+      track.name,
+      track.albumName,
+      track.artistName,
+      track.albumArtist,
+      track.composer,
+      track.genre,
+      track.label,
+    ];
+    return fields.any(
+      (value) => value != null && value.toLowerCase().contains(query),
+    );
+  }
+
+  int _findCurrentEntryIndex(
+    List<CollectionTrackEntry> entries,
+    MediaItem item,
+  ) {
+    final idIndex = entries.indexWhere((entry) => entry.track.id == item.id);
+    if (idIndex >= 0) return idIndex;
+
+    final title = item.title.trim().toLowerCase();
+    if (title.isEmpty) return -1;
+    final artist = (item.artist ?? '').trim().toLowerCase();
+    return entries.indexWhere((entry) {
+      final track = entry.track;
+      if (track.name.trim().toLowerCase() != title) return false;
+      if (artist.isEmpty) return true;
+      final trackArtist = track.artistName.trim().toLowerCase();
+      return trackArtist == artist || trackArtist.contains(artist);
+    });
+  }
+
+  Future<void> _focusPlaylistSearch() async {
+    if (scrollController.hasClients) {
+      final position = scrollController.position;
+      final revealOffset =
+          (calculateExpandedHeight(context) - kToolbarHeight)
+              .clamp(0.0, position.maxScrollExtent)
+              .toDouble();
+      await scrollController.animateTo(
+        revealOffset,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final fieldContext = _playlistSearchFieldKey.currentContext;
+    if (fieldContext != null) {
+      await Scrollable.ensureVisible(
+        fieldContext,
+        alignment: 0.2,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (mounted) _playlistSearchFocusNode.requestFocus();
+  }
+
+  Future<void> _jumpToCurrentTrack(List<CollectionTrackEntry> entries) async {
+    final item = ref.read(currentMediaItemProvider).value;
+    if (item == null) return;
+    final index = _findCurrentEntryIndex(entries, item);
+    if (index < 0 || entries.isEmpty) return;
+
+    _playlistSearchController.clear();
+    setState(() {
+      _playlistSearchQuery = '';
+      _jumpTargetEntryKey = entries[index].key;
+      _jumpTargetGlobalKey = GlobalKey(debugLabel: 'current-playlist-track');
+    });
+
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !scrollController.hasClients) return;
+
+    final position = scrollController.position;
+    final maxExtent = position.maxScrollExtent;
+    final headerExtent = calculateExpandedHeight(context);
+    final averageRowExtent =
+        ((maxExtent - headerExtent) / entries.length)
+            .clamp(56.0, 104.0)
+            .toDouble();
+    final estimatedOffset =
+        (headerExtent + index * averageRowExtent)
+            .clamp(0.0, maxExtent)
+            .toDouble();
+    final proportionalOffset =
+        (maxExtent * index / entries.length).clamp(0.0, maxExtent).toDouble();
+
+    BuildContext? targetContext;
+    for (final offset in [estimatedOffset, proportionalOffset]) {
+      await scrollController.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      targetContext = _jumpTargetGlobalKey?.currentContext;
+      if (targetContext != null) break;
+    }
+
+    if (targetContext != null) {
+      await Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.2,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _playlistSearchController.dispose();
+    _playlistSearchFocusNode.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -314,6 +456,7 @@ class _LibraryTracksFolderScreenState
     final bottomPadding = isSelectionMode
         ? MediaQuery.paddingOf(context).bottom
         : 0.0;
+    final visibleEntryIndices = _visibleEntryIndices(entries);
 
     return CollectionScaffold(
       scrollController: scrollController,
@@ -327,6 +470,8 @@ class _LibraryTracksFolderScreenState
       ),
       appBar: _buildAppBar(context, colorScheme, title, entries, playlist),
       slivers: [
+        if (_isPlaylistMode && entries.isNotEmpty)
+          _buildPlaylistSearchSliver(),
         if (entries.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
@@ -335,18 +480,36 @@ class _LibraryTracksFolderScreenState
               subtitle: emptySubtitle,
             ),
           )
+        else if (visibleEntryIndices.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  context.l10n.searchEmptyResultSubtitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+          )
         else
           SliverPadding(
             padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate((context, index) {
-                final entry = entries[index];
+                final originalIndex = visibleEntryIndices[index];
+                final entry = entries[originalIndex];
                 final isSelected = selectedIds.contains(entry.key);
                 final isInHistory = existingHistoryKeys.contains(
-                  historyLookups[index].lookupKey,
+                  historyLookups[originalIndex].lookupKey,
                 );
                 return KeyedSubtree(
-                  key: ValueKey(entry.key),
+                  key: entry.key == _jumpTargetEntryKey &&
+                          _jumpTargetGlobalKey != null
+                      ? _jumpTargetGlobalKey
+                      : ValueKey(entry.key),
                   child: StaggeredListItem(
                     index: index,
                     child: _CollectionTrackTile(
@@ -354,7 +517,7 @@ class _LibraryTracksFolderScreenState
                       mode: widget.mode,
                       playlistId: widget.playlistId,
                       folderTracks: folderTracks,
-                      trackIndex: index,
+                      trackIndex: originalIndex,
                       isInHistory: isInHistory,
                       isSelectionMode: isSelectionMode,
                       isSelected: isSelected,
@@ -367,10 +530,58 @@ class _LibraryTracksFolderScreenState
                     ),
                   ),
                 );
-              }, childCount: entries.length),
+              }, childCount: visibleEntryIndices.length),
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildPlaylistSearchSliver() {
+    final colors = Theme.of(context).colorScheme;
+    return SliverToBoxAdapter(
+      child: Container(
+        key: _playlistSearchFieldKey,
+        padding: EdgeInsets.fromLTRB(
+          16 + wideListInset(context),
+          12,
+          16 + wideListInset(context),
+          8,
+        ),
+        child: TextField(
+          controller: _playlistSearchController,
+          focusNode: _playlistSearchFocusNode,
+          textInputAction: TextInputAction.search,
+          onChanged: (value) {
+            setState(() {
+              _playlistSearchQuery = value;
+              _jumpTargetEntryKey = null;
+              _jumpTargetGlobalKey = null;
+            });
+          },
+          decoration: InputDecoration(
+            hintText:
+                '${context.l10n.searchSongs} · ${context.l10n.searchAlbums} · ${context.l10n.searchArtists}',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _playlistSearchQuery.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: context.l10n.dialogClear,
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      _playlistSearchController.clear();
+                      setState(() => _playlistSearchQuery = '');
+                    },
+                  ),
+            filled: true,
+            fillColor: colors.surfaceContainerLow,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -633,6 +844,21 @@ class _LibraryTracksFolderScreenState
             )
           : null,
       appBarActions: [
+        if (isPlaylistMode && !isSelectionMode)
+          Consumer(
+            builder: (context, ref, _) {
+              final item = ref.watch(currentMediaItemProvider).value;
+              final canLocate =
+                  item != null && _findCurrentEntryIndex(entries, item) >= 0;
+              return HeaderCircleButton(
+                icon: Icons.my_location,
+                iconSize: 20,
+                tooltip: 'Jump to currently playing track',
+                onPressed:
+                    canLocate ? () => _jumpToCurrentTrack(entries) : null,
+              );
+            },
+          ),
         if (!isSelectionMode && entries.isNotEmpty)
           HeaderCircleButton(
             icon: Icons.ios_share,
@@ -640,26 +866,30 @@ class _LibraryTracksFolderScreenState
             tooltip: context.l10n.collectionExportM3u,
             onPressed: () => _exportAsM3u8(context, title, entries),
           ),
-        if (isPlaylistMode && !isSelectionMode) ...[
-          const SizedBox(width: 8),
-          HeaderCircleButton(
-            icon: Icons.edit_outlined,
-            iconSize: 20,
-            tooltip: context.l10n.collectionRenamePlaylist,
-            onPressed: () {
-              final id = widget.playlistId ?? playlist?.id;
-              if (id == null || id.isEmpty) return;
-              _showRenamePlaylistDialog(context, id, playlist?.name ?? title);
+        if (isPlaylistMode && !isSelectionMode)
+          PopupMenuButton<String>(
+            tooltip: 'More playlist options',
+            icon: const Icon(Icons.more_horiz),
+            onSelected: (value) {
+              if (value == 'rename') {
+                final id = widget.playlistId ?? playlist?.id;
+                if (id == null || id.isEmpty) return;
+                _showRenamePlaylistDialog(context, id, playlist?.name ?? title);
+              } else if (value == 'cover') {
+                _showCoverOptionsSheet(context, hasCustomCover);
+              }
             },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'rename',
+                child: Text(context.l10n.collectionRenamePlaylist),
+              ),
+              PopupMenuItem(
+                value: 'cover',
+                child: Text(context.l10n.collectionPlaylistChangeCover),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          HeaderCircleButton(
-            icon: Icons.camera_alt_outlined,
-            iconSize: 20,
-            tooltip: context.l10n.collectionPlaylistChangeCover,
-            onPressed: () => _showCoverOptionsSheet(context, hasCustomCover),
-          ),
-        ],
       ],
       // Centered so the tight leading slot cannot stretch it.
       leading: Center(
