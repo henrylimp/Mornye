@@ -1,0 +1,85 @@
+name: Build iOS IPA (no Discord SDK)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    env:
+      MORNYE_DISCORD_SDK: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Patch source for iOS 15 and left sidebar
+        run: |
+          sed -i "s/'16.0'/'15.0'/g" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec
+          sed -i "s/IPHONEOS_DEPLOYMENT_TARGET = 16.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" ios/Runner.xcodeproj/project.pbxproj
+          sed -i "s/IPHONEOS_DEPLOYMENT_TARGET=16.0/IPHONEOS_DEPLOYMENT_TARGET=15.0/; s/apple-ios16.0/apple-ios15.0/g" scripts/build_rust_backend.sh
+          sed -i "s/width >= navigationRailBreakpoint;/width >= 700;/" lib/utils/adaptive_layout.dart
+          git diff --stat
+          ! grep -rn "16\.0" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec
+
+      - name: Select Xcode 26.1.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.1.app
+          xcodebuild -version
+
+      - name: Build Rust backend for iOS
+        run: bash scripts/build_ios.sh
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Normalize ffmpeg plugin shell scripts (strip CRLF)
+        run: |
+          find "$HOME/.pub-cache/hosted" -path "*ffmpeg_kit_flutter_new_audio*/scripts/*.sh" -type f -print0 |
+            while IFS= read -r -d '' f; do
+              perl -pi -e 's/\r$//' "$f"
+              chmod +x "$f"
+            done
+
+      - name: Generate app icons
+        run: dart run flutter_launcher_icons
+
+      - name: Configure pods
+        run: |
+          flutter build ios --release --no-codesign --config-only --target lib/main.dart
+          cd ios && pod install
+
+      - name: Archive (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Runner.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+
+      - name: Create IPA
+        run: |
+          mkdir -p build/ios/ipa
+          cd ios/build/Runner.xcarchive/Products/Applications
+          mkdir Payload && cp -r Runner.app Payload/
+          zip -qr "$GITHUB_WORKSPACE/build/ios/ipa/Mornye-ios15-unsigned.ipa" Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-ipa
+          path: build/ios/ipa/Mornye-ios15-unsigned.ipa
