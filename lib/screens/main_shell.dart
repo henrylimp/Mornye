@@ -690,20 +690,23 @@ class _MainShellState extends ConsumerState<MainShell>
         MediaQuery.viewInsetsOf(context).bottom == 0 &&
         MediaQuery.textScalerOf(context).scale(15) <= 20;
 
-    Widget observeScroll(Widget child, int index) => LibraryFastScroller(
-      minScreens: 0,
-      topPadding: MediaQuery.paddingOf(context).top + kToolbarHeight,
-      labelAt: (_) => null,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (notification) {
-          if (canMinimizeChrome && index == _currentIndex) {
-            return _mornyeChrome.handleScroll(notification);
-          }
-          return false;
-        },
-        child: child,
-      ),
-    );
+    Widget observeScroll(Widget child, int index) =>
+        NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            if (canMinimizeChrome && index == _currentIndex) {
+              return _mornyeChrome.handleScroll(notification);
+            }
+            return false;
+          },
+          // Put the fast-scroller inside the chrome listener so it receives
+          // scroll notifications before the chrome handler can consume them.
+          child: LibraryFastScroller(
+            minScreens: 0,
+            topPadding: MediaQuery.paddingOf(context).top + kToolbarHeight,
+            labelAt: (_) => null,
+            child: child,
+          ),
+        );
 
     final pageView = KeyedSubtree(
       key: _pageViewKey,
