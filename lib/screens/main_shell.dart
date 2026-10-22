@@ -41,7 +41,6 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/nav_destination_icons.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/mini_player.dart';
-import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/lazy_tab_view.dart';
 import 'package:mornye/widgets/expressive_navigation_bar.dart';
 import 'package:mornye/widgets/mornye_bottom_bar.dart';
@@ -694,18 +693,13 @@ class _MainShellState extends ConsumerState<MainShell>
         NotificationListener<ScrollNotification>(
           onNotification: (notification) {
             if (canMinimizeChrome && index == _currentIndex) {
-              return _mornyeChrome.handleScroll(notification);
+              _mornyeChrome.handleScroll(notification);
             }
+            // Keep bubbling so the app-level fast scrollbar receives the same
+            // vertical-scroll event after the chrome has reacted to it.
             return false;
           },
-          // Put the fast-scroller inside the chrome listener so it receives
-          // scroll notifications before the chrome handler can consume them.
-          child: LibraryFastScroller(
-            minScreens: 0,
-            topPadding: MediaQuery.paddingOf(context).top + kToolbarHeight,
-            labelAt: (_) => null,
-            child: child,
-          ),
+          child: child,
         );
 
     final pageView = KeyedSubtree(
