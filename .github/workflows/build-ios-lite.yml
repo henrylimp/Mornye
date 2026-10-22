@@ -17,12 +17,12 @@ jobs:
 
       - name: Patch source for iOS 15 and left sidebar
         run: |
-          sed -i "s/'16.0'/'15.0'/g" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec
-          sed -i "s/IPHONEOS_DEPLOYMENT_TARGET = 16.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" ios/Runner.xcodeproj/project.pbxproj
-          sed -i "s/IPHONEOS_DEPLOYMENT_TARGET=16.0/IPHONEOS_DEPLOYMENT_TARGET=15.0/; s/apple-ios16.0/apple-ios15.0/g" scripts/build_rust_backend.sh
-          sed -i "s/width >= navigationRailBreakpoint;/width >= 700;/" lib/utils/adaptive_layout.dart
+          perl -pi -e "s/'16\.0'/'15.0'/g" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec
+          perl -pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = 16\.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' ios/Runner.xcodeproj/project.pbxproj
+          perl -pi -e 's/IPHONEOS_DEPLOYMENT_TARGET=16\.0/IPHONEOS_DEPLOYMENT_TARGET=15.0/; s/apple-ios16\.0/apple-ios15.0/g' scripts/build_rust_backend.sh
+          perl -pi -e 's/width >= navigationRailBreakpoint;/width >= 700;/' lib/utils/adaptive_layout.dart
           git diff --stat
-          ! grep -rn "16\.0" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec
+          if grep -n "16\.0" ios/Podfile rust_backend/MornyeBackend.podspec third_party/mornye_discord/ios/mornye_discord.podspec; then echo "patch incomplete"; exit 1; fi
 
       - name: Select Xcode 26.1.1
         run: |
