@@ -344,12 +344,16 @@ class _MainShellState extends ConsumerState<MainShell>
       settingsProvider.select((s) => s.showExtensionStore),
     );
     _mornyeChrome.expand();
-    if (index == 0 && resetHome && (context.isMornye || _currentIndex == 0)) {
-      _resetHomeToMain();
+    if (resetHome) {
+      if (index == 0) {
+        _resetHomeToMain();
+      } else {
+        // A tab tap returns the destination to its root, even when switching
+        // to a tab that was previously left on a detail page.
+        _navigatorForTab(index, showStore)?.popUntil((route) => route.isFirst);
+      }
     }
-    if (index == 0 && _currentIndex == 0) {
-      return;
-    }
+    if (_currentIndex == index) return;
 
     if (_currentIndex != index) {
       final previousIndex = _currentIndex;
