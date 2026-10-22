@@ -845,6 +845,13 @@ class _LibraryTracksFolderScreenState
           : null,
       appBarActions: [
         if (isPlaylistMode && !isSelectionMode)
+          HeaderCircleButton(
+            icon: Icons.search,
+            iconSize: 20,
+            tooltip: context.l10n.librarySearchHint,
+            onPressed: _focusPlaylistSearch,
+          ),
+        if (isPlaylistMode && !isSelectionMode)
           Consumer(
             builder: (context, ref, _) {
               final item = ref.watch(currentMediaItemProvider).value;
@@ -859,19 +866,14 @@ class _LibraryTracksFolderScreenState
               );
             },
           ),
-        if (!isSelectionMode && entries.isNotEmpty)
-          HeaderCircleButton(
-            icon: Icons.ios_share,
-            iconSize: 20,
-            tooltip: context.l10n.collectionExportM3u,
-            onPressed: () => _exportAsM3u8(context, title, entries),
-          ),
         if (isPlaylistMode && !isSelectionMode)
           PopupMenuButton<String>(
             tooltip: 'More playlist options',
             icon: const Icon(Icons.more_horiz),
             onSelected: (value) {
-              if (value == 'rename') {
+              if (value == 'export') {
+                _exportAsM3u8(context, title, entries);
+              } else if (value == 'rename') {
                 final id = widget.playlistId ?? playlist?.id;
                 if (id == null || id.isEmpty) return;
                 _showRenamePlaylistDialog(context, id, playlist?.name ?? title);
@@ -880,6 +882,11 @@ class _LibraryTracksFolderScreenState
               }
             },
             itemBuilder: (context) => [
+              if (entries.isNotEmpty)
+                PopupMenuItem(
+                  value: 'export',
+                  child: Text(context.l10n.collectionExportM3u),
+                ),
               PopupMenuItem(
                 value: 'rename',
                 child: Text(context.l10n.collectionRenamePlaylist),
@@ -889,6 +896,13 @@ class _LibraryTracksFolderScreenState
                 child: Text(context.l10n.collectionPlaylistChangeCover),
               ),
             ],
+          ),
+        if (!isPlaylistMode && !isSelectionMode && entries.isNotEmpty)
+          HeaderCircleButton(
+            icon: Icons.ios_share,
+            iconSize: 20,
+            tooltip: context.l10n.collectionExportM3u,
+            onPressed: () => _exportAsM3u8(context, title, entries),
           ),
       ],
       // Centered so the tight leading slot cannot stretch it.
