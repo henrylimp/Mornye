@@ -693,8 +693,10 @@ class _MainShellState extends ConsumerState<MainShell>
         NotificationListener<ScrollNotification>(
           onNotification: (notification) {
             if (canMinimizeChrome && index == _currentIndex) {
-              return _mornyeChrome.handleScroll(notification);
+              _mornyeChrome.handleScroll(notification);
             }
+            // Keep bubbling so the app-level fast scrollbar receives the same
+            // vertical-scroll event after the chrome has reacted to it.
             return false;
           },
           child: child,

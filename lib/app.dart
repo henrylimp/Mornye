@@ -18,6 +18,7 @@ import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:mornye/widgets/mornye_glass_preparation.dart';
 import 'package:mornye/widgets/playback_feedback.dart';
+import 'package:mornye/widgets/library_fast_scroller.dart';
 
 String initialLocationForAppState({
   required bool isFirstLaunch,
@@ -210,7 +211,13 @@ class MornyeApp extends ConsumerWidget {
             final appContent = _OrientationFade(
               child: AppScaffoldMessenger(
                 child: PlaybackFeedback(
-                  child: child ?? const SizedBox.shrink(),
+                  child: LibraryFastScroller(
+                    minScreens: 0,
+                    topPadding:
+                        MediaQuery.paddingOf(context).top + kToolbarHeight,
+                    labelAt: (_) => null,
+                    child: child ?? const SizedBox.shrink(),
+                  ),
                 ),
               ),
             );
