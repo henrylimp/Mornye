@@ -428,7 +428,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
         if (indices.isEmpty) return null;
         final position = (fraction * indices.length)
             .floor()
-            .clamp(0, indices.length - 1);
+            .clamp(0, indices.length - 1)
+            .toInt();
         final track = _tracks[indices[position]];
         return track.name.isNotEmpty ? track.name : track.artistName;
       },
