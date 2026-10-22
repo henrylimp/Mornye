@@ -1,0 +1,102 @@
+name: Unsigned iOS IPA (LiveContainer)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch or commit to build"
+        required: true
+        default: "feature/playlist-search-tab-root-fast-scroll"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-ios-ipa-${{ github.event.pull_request.head.ref || inputs.source_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      MORNYE_DISCORD_SDK: "0"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.source_ref || github.sha }}
+
+      - name: Activate pinned Rust toolchain
+        working-directory: rust_backend
+        run: rustup show
+
+      - name: Cache Cargo registry and iOS build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
+
+      - name: Build Rust iOS frameworks
+        run: bash scripts/build_rust_backend.sh ios
+
+      - name: Set up pinned Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Install iOS pods
+        run: |
+          cd ios
+          pod install
+
+      - name: Build unsigned iOS app
+        run: |
+          flutter build ios --release --no-codesign --target lib/main.dart --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
+          test -d build/ios/iphoneos/Runner.app
+
+      - name: Package unsigned IPA for sideloading
+        run: |
+          rm -rf build/unsigned-ipa
+          mkdir -p build/unsigned-ipa/Payload
+          ditto build/ios/iphoneos/Runner.app build/unsigned-ipa/Payload/Runner.app
+          # Keep this unsigned; LiveContainer handles its own app-container workflow.
+          find build/unsigned-ipa/Payload/Runner.app -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find build/unsigned-ipa/Payload/Runner.app -type f -name embedded.mobileprovision -delete
+          (cd build/unsigned-ipa && /usr/bin/zip -qry Mornye-unsigned.ipa Payload)
+          test -s build/unsigned-ipa/Mornye-unsigned.ipa
+          /usr/bin/unzip -l build/unsigned-ipa/Mornye-unsigned.ipa | head -25
+          cat > build/unsigned-ipa/README.txt <<'EOF'
+          Mornye unsigned iOS IPA
+          
+          This package is built from the playlist-search/tab-root/fast-scroll feature branch.
+          It is not signed with an Apple developer certificate and is not intended for App Store installation.
+          Import compatibility depends on the sideloading/container tool and on the app's iOS entitlements.
+          The app's minimum iOS deployment target is 16.0.
+          EOF
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Mornye-unsigned-IPA-LiveContainer
+          path: |
+            build/unsigned-ipa/Mornye-unsigned.ipa
+            build/unsigned-ipa/README.txt
+          if-no-files-found: error
+          retention-days: 14
