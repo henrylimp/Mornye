@@ -13,7 +13,7 @@ import 'package:mornye/theme/mornye_theme.dart';
 /// list by the finger's travel rather than jumping to where it touched, so
 /// grabbing the thumb never moves the list by itself. Slow drags scrub with
 /// finer control in large libraries; quick drags still cover the full range.
-/// The thumb shows while scrolling and only for lists several screens long.
+/// The thumb appears while scrolling once content exceeds [minScreens].
 class LibraryFastScroller extends StatefulWidget {
   const LibraryFastScroller({
     super.key,
@@ -21,6 +21,7 @@ class LibraryFastScroller extends StatefulWidget {
     required this.labelAt,
     this.topPadding = 0,
     this.bottomPadding = 0,
+    this.minScreens = 4.0,
   });
 
   /// A scroll view. The scroller drives the [Scrollable] that reports scroll
@@ -35,6 +36,10 @@ class LibraryFastScroller extends StatefulWidget {
   final double topPadding;
   final double bottomPadding;
 
+  /// Minimum scrollable length, measured in viewport heights, before showing
+  /// the thumb. Collection pages can lower this for shorter playlists.
+  final double minScreens;
+
   @override
   State<LibraryFastScroller> createState() => _LibraryFastScrollerState();
 }
@@ -42,7 +47,7 @@ class LibraryFastScroller extends StatefulWidget {
 class _LibraryFastScrollerState extends State<LibraryFastScroller> {
   static const _thumbHeight = 52.0;
   static const _hitWidth = 32.0;
-  static const _minScreens = 4;
+
 
   ScrollPosition? _position;
   ScrollPosition? _outerPosition;
@@ -57,7 +62,7 @@ class _LibraryFastScrollerState extends State<LibraryFastScroller> {
   double _dragDirection = 0;
   Timer? _hideTimer;
 
-  bool get _long => _maxExtent > _viewport * _minScreens;
+  bool get _long => _maxExtent > _viewport * widget.minScreens;
 
   double get _fraction =>
       _maxExtent <= 0 ? 0 : (_pixels / _maxExtent).clamp(0.0, 1.0);

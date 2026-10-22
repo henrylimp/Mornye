@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:audio_service/audio_service.dart' show MediaItem;
 import 'package:mornye/screens/track_history_snapshot.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/expressive_button_group.dart';
@@ -14,6 +15,7 @@ import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/utils/image_cache_utils.dart';
 import 'package:mornye/utils/cover_art_utils.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
@@ -23,6 +25,7 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
 import 'package:mornye/widgets/track_list_tile.dart';
+import 'package:mornye/widgets/library_fast_scroller.dart';
 import 'package:mornye/widgets/track_detail_actions.dart';
 import 'package:mornye/screens/collapsing_header_scroll_mixin.dart';
 import 'package:mornye/widgets/error_card.dart';
@@ -65,12 +68,145 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
   String? _resolvedPlaylistName;
   String? _resolvedCoverUrl;
   String? _resolvedHeaderVideoUrl;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  bool _showSearch = false;
+  List<int>? _cachedVisibleTrackIndices;
+  int? _jumpTargetIndex;
+  GlobalKey? _jumpTargetKey;
 
   List<Track> get _tracks => _fetchedTracks ?? widget.tracks;
   String get _playlistName => _resolvedPlaylistName ?? widget.playlistName;
   String? get _coverUrl => _resolvedCoverUrl ?? widget.coverUrl;
   String? get _headerVideoUrl =>
       _resolvedHeaderVideoUrl ?? widget.headerVideoUrl;
+
+  List<int> get _visibleTrackIndices {
+    final cached = _cachedVisibleTrackIndices;
+    if (cached != null) return cached;
+    final query = _searchQuery.trim().toLowerCase();
+    return _cachedVisibleTrackIndices = [
+      for (var index = 0; index < _tracks.length; index++)
+        if (query.isEmpty || _trackMatchesQuery(_tracks[index], query)) index,
+    ];
+  }
+
+  bool _trackMatchesQuery(Track track, String query) {
+    final searchable = <String?>[
+      track.name,
+      track.albumName,
+      track.artistName,
+      track.albumArtist,
+      track.composer,
+      track.genre,
+      track.label,
+    ];
+    return searchable.any(
+      (value) => value != null && value.toLowerCase().contains(query),
+    );
+  }
+
+  int _findCurrentTrackIndex(MediaItem item) {
+    final exactId = _tracks.indexWhere((track) => track.id == item.id);
+    if (exactId >= 0) return exactId;
+
+    final title = item.title.trim().toLowerCase();
+    if (title.isEmpty) return -1;
+    final artist = (item.artist ?? '').trim().toLowerCase();
+    return _tracks.indexWhere((track) {
+      if (track.name.trim().toLowerCase() != title) return false;
+      if (artist.isEmpty) return true;
+      final trackArtist = track.artistName.trim().toLowerCase();
+      return trackArtist == artist || trackArtist.contains(artist);
+    });
+  }
+
+  void _toggleSearch() {
+    final opening = !_showSearch;
+    setState(() {
+      _showSearch = opening;
+      if (!opening) {
+        _searchController.clear();
+        _searchQuery = '';
+        _cachedVisibleTrackIndices = null;
+      }
+      _jumpTargetIndex = null;
+      _jumpTargetKey = null;
+    });
+    if (opening) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !scrollController.hasClients) return;
+        scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      });
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value;
+      _cachedVisibleTrackIndices = null;
+      _jumpTargetIndex = null;
+      _jumpTargetKey = null;
+    });
+  }
+
+  Future<void> _jumpToCurrentTrack() async {
+    final item = ref.read(currentMediaItemProvider).value;
+    if (item == null) return;
+    final index = _findCurrentTrackIndex(item);
+    if (index < 0) return;
+
+    _searchController.clear();
+    setState(() {
+      _showSearch = false;
+      _searchQuery = '';
+      _cachedVisibleTrackIndices = null;
+      _jumpTargetIndex = index;
+      _jumpTargetKey = GlobalKey(debugLabel: 'current-playlist-track');
+    });
+
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !scrollController.hasClients) return;
+
+    final position = scrollController.position;
+    final headerExtent = calculateExpandedHeight(context);
+    final estimatedTrackExtent =
+        ((position.maxScrollExtent - headerExtent) / _tracks.length)
+            .clamp(58.0, 100.0)
+            .toDouble();
+    final maxExtent = position.maxScrollExtent;
+    final estimatedOffset = (headerExtent + index * estimatedTrackExtent)
+        .clamp(0.0, maxExtent)
+        .toDouble();
+    final proportionalOffset = (maxExtent * index / _tracks.length)
+        .clamp(0.0, maxExtent)
+        .toDouble();
+
+    BuildContext? targetContext;
+    for (final offset in [estimatedOffset, proportionalOffset]) {
+      await scrollController.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      targetContext = _jumpTargetKey?.currentContext;
+      if (targetContext != null) break;
+    }
+
+    if (targetContext != null) {
+      await Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.2,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
 
   /// Playlists can legitimately contain the same track twice, so selection is
   /// keyed by position as well as id (matching the album screen).
@@ -189,6 +325,12 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
     _fetchTracksIfNeeded();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _fetchTracksIfNeeded() async {
     if (widget.tracks.isNotEmpty || widget.playlistId == null) return;
 
@@ -236,6 +378,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
 
       setState(() {
         _fetchedTracks = tracks;
+        _cachedVisibleTrackIndices = null;
         _resolvedPlaylistName = resolvedPlaylistName;
         _resolvedCoverUrl = (playlistInfo?['images'] ?? owner?['images'])
             ?.toString();
@@ -277,20 +420,73 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
         _trackSelectionId(_tracks[index], index),
     });
 
-    return CollectionScaffold(
-      scrollController: scrollController,
-      isSelectionMode: isSelectionMode,
-      onExitSelectionMode: exitSelectionMode,
-      selectionBar: _buildSelectionBottomBar(
-        context,
-        colorScheme,
-        bottomPadding,
+    return LibraryFastScroller(
+      minScreens: 1.0,
+      topPadding: MediaQuery.paddingOf(context).top + kToolbarHeight,
+      labelAt: (fraction) {
+        final indices = _visibleTrackIndices;
+        if (indices.isEmpty) return null;
+        final position = (fraction * indices.length)
+            .floor()
+            .clamp(0, indices.length - 1);
+        final track = _tracks[indices[position]];
+        return track.name.isNotEmpty ? track.name : track.artistName;
+      },
+      child: CollectionScaffold(
+        scrollController: scrollController,
+        isSelectionMode: isSelectionMode,
+        onExitSelectionMode: exitSelectionMode,
+        selectionBar: _buildSelectionBottomBar(
+          context,
+          colorScheme,
+          bottomPadding,
+        ),
+        appBar: _buildAppBar(context, colorScheme),
+        slivers: [
+          if (_showSearch) _buildSearchField(context),
+          _buildTrackList(context, colorScheme),
+          _buildPlaylistFooter(context, colorScheme),
+        ],
       ),
-      appBar: _buildAppBar(context, colorScheme),
-      slivers: [
-        _buildTrackList(context, colorScheme),
-        _buildPlaylistFooter(context, colorScheme),
-      ],
+    );
+  }
+
+  Widget _buildSearchField(BuildContext context) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          16 + wideListInset(context),
+          12,
+          16 + wideListInset(context),
+          8,
+        ),
+        child: TextField(
+          controller: _searchController,
+          autofocus: true,
+          onChanged: _onSearchChanged,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText:
+                '${context.l10n.searchSongs}, ${context.l10n.searchAlbums}, ${context.l10n.searchArtists}',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _searchQuery.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: context.l10n.dialogClear,
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      _searchController.clear();
+                      _onSearchChanged('');
+                    },
+                  ),
+            filled: true,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -325,6 +521,25 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
 
     return AlbumDetailHeader(
       title: _playlistName,
+      appBarActions: [
+        IconButton(
+          tooltip: 'Search this playlist',
+          icon: Icon(_showSearch ? Icons.search_off : Icons.search),
+          onPressed: _toggleSearch,
+        ),
+        Consumer(
+          builder: (context, ref, _) {
+            final item = ref.watch(currentMediaItemProvider).value;
+            final canLocate =
+                item != null && _findCurrentTrackIndex(item) >= 0;
+            return IconButton(
+              tooltip: 'Jump to currently playing track',
+              icon: const Icon(Icons.my_location),
+              onPressed: canLocate ? _jumpToCurrentTrack : null,
+            );
+          },
+        ),
+      ],
       immersive: context.isMornye,
       squareArtwork: !hasMotion,
       expandedHeight: expandedHeight,
@@ -425,7 +640,19 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
       );
     }
 
-    _historySnapshot.update(_tracks);
+    final visibleIndices = _visibleTrackIndices;
+    if (visibleIndices.isEmpty) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Center(child: Text(context.l10n.errorNoTracksFound)),
+        ),
+      );
+    }
+    final visibleTracks = [
+      for (final originalIndex in visibleIndices) _tracks[originalIndex],
+    ];
+    _historySnapshot.update(visibleTracks);
     final historyLookups = _historySnapshot.lookups;
     final existingHistoryKeys = ref.watch(
       downloadHistoryVisibleBatchExistsProvider(_historySnapshot.request),
@@ -434,13 +661,16 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
       padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate((context, index) {
-          final track = _tracks[index];
-          final selectionId = _trackSelectionId(track, index);
+          final originalIndex = visibleIndices[index];
+          final track = _tracks[originalIndex];
+          final selectionId = _trackSelectionId(track, originalIndex);
           final isInHistory = existingHistoryKeys.contains(
             historyLookups[index].lookupKey,
           );
           return KeyedSubtree(
-            key: ValueKey(track.id),
+            key: originalIndex == _jumpTargetIndex && _jumpTargetKey != null
+                ? _jumpTargetKey
+                : ValueKey(selectionId),
             child: StaggeredListItem(
               index: index,
               child: TrackListTile(
@@ -454,7 +684,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
                     _downloadTrack(
                       context,
                       track,
-                      playlistPosition: index + 1,
+                      playlistPosition: originalIndex + 1,
                       forceQualityPicker: forceQualityPicker,
                     ),
                 leading: track.coverUrl != null
@@ -486,7 +716,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
               ),
             ),
           );
-        }, childCount: _tracks.length),
+        }, childCount: visibleIndices.length),
       ),
     );
   }
